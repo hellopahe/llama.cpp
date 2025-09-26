@@ -70,6 +70,8 @@ add_library(${TARGET} STATIC
     sampling.h
     speculative.cpp
     speculative.h
+    wav-writer.cpp
+    wav-writer.h
     )
 
 if (BUILD_SHARED_LIBS)

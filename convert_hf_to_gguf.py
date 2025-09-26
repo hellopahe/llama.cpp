@@ -3749,6 +3749,114 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+@ModelBase.register("Qwen3OmniMoeThinkerForConditionalGeneration", "Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMoeModel(Qwen3MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNIMOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3OmniMoe uses the thinker module as the main text generation component
+        if "thinker_config" in self.hparams:
+            # Save audio encoder config if present
+            if "audio_config" in self.hparams["thinker_config"]:
+                self.audio_config = self.hparams["thinker_config"]["audio_config"]
+            self.hparams = {**self.hparams, **self.hparams["thinker_config"]["text_config"]}
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Add audio encoder parameters if available
+        if hasattr(self, 'audio_config'):
+            # Audio encoder architecture parameters
+            self.gguf_writer.add_uint32("audio_encoder.encoder_layers", self.audio_config.get("encoder_layers", 12))
+            self.gguf_writer.add_uint32("audio_encoder.d_model", self.audio_config.get("d_model", 768))
+            self.gguf_writer.add_uint32("audio_encoder.encoder_attention_heads", self.audio_config.get("encoder_attention_heads", 12))
+            self.gguf_writer.add_uint32("audio_encoder.encoder_ffn_dim", self.audio_config.get("encoder_ffn_dim", 3072))
+            self.gguf_writer.add_uint32("audio_encoder.num_mel_bins", self.audio_config.get("num_mel_bins", 80))
+            self.gguf_writer.add_uint32("audio_encoder.max_source_positions", self.audio_config.get("max_source_positions", 1500))
+            self.gguf_writer.add_uint32("audio_encoder.output_dim", self.audio_config.get("output_dim", 4096))
+
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+        # Handle audio encoder tensor names
+        if name.startswith("audio_encoder."):
+            # Map positional embedding
+            if name == "audio_encoder.positional_embedding.positional_embedding":
+                return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_EMBD_POS]
+
+            # Map layer components
+            if ".layers." in name:
+                # Extract layer number
+                parts = name.split(".")
+                layer_idx = None
+                for i, part in enumerate(parts):
+                    if part == "layers" and i + 1 < len(parts):
+                        layer_idx = parts[i + 1]
+                        break
+
+                if layer_idx is not None:
+                    # Map attention and FFN components
+                    if name.endswith(".self_attn_layer_norm.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_INPUT_NORM].format(bid=int(layer_idx))
+                    elif name.endswith(".self_attn.q_proj.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_ATTN_Q].format(bid=int(layer_idx))
+                    elif name.endswith(".self_attn.k_proj.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_ATTN_K].format(bid=int(layer_idx))
+                    elif name.endswith(".self_attn.v_proj.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_ATTN_V].format(bid=int(layer_idx))
+                    elif name.endswith(".self_attn.out_proj.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_OUTPUT].format(bid=int(layer_idx))
+                    elif name.endswith(".final_layer_norm.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_OUTPUT_NORM].format(bid=int(layer_idx))
+                    elif name.endswith(".fc1.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_FFN_GATE].format(bid=int(layer_idx))
+                    elif name.endswith(".fc2.weight"):
+                        return gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_FFN_DOWN].format(bid=int(layer_idx))
+                    # Handle biases if present
+                    elif name.endswith(".self_attn.q_proj.bias"):
+                        return f"audio_encoder.blk.{int(layer_idx)}.attn_q.bias"
+                    elif name.endswith(".self_attn.k_proj.bias"):
+                        return f"audio_encoder.blk.{int(layer_idx)}.attn_k.bias"
+                    elif name.endswith(".self_attn.v_proj.bias"):
+                        return f"audio_encoder.blk.{int(layer_idx)}.attn_v.bias"
+                    elif name.endswith(".self_attn.out_proj.bias"):
+                        return f"audio_encoder.blk.{int(layer_idx)}.attn_output.bias"
+
+            # For other audio encoder tensors, keep the name as is
+            return name
+
+        # For non-audio tensors, use parent class mapping
+        return super().map_tensor_name(name)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Handle thinker prefix
+        name = name.replace("thinker.", "")
+
+        # Handle audio encoder tensors
+        if name.startswith("audio_tower."):
+            # Map audio encoder tensors to the correct names
+            audio_name = name.replace("audio_tower.", "audio_encoder.")
+
+            # Handle convolutional layers
+            if "conv2d" in audio_name or "conv_out" in audio_name:
+                # These are linear/conv layers
+                return [(self.map_tensor_name(audio_name), data_torch)]
+
+            # Handle encoder layers
+            if ".layers." in audio_name:
+                # Extract layer number and map appropriately
+                return [(self.map_tensor_name(audio_name), data_torch)]
+
+            # Handle other audio encoder tensors
+            return [(self.map_tensor_name(audio_name), data_torch)]
+
+        # Skip talker and code2wav tensors as they're not needed for inference
+        if name.startswith("talker.") or name.startswith("code2wav."):
+            return []
+
+        # Let parent class handle the rest (including MoE experts)
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2

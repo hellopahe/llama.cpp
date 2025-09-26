@@ -5,10 +5,12 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
+#include "wav-writer.h"
 
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -980,6 +982,48 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
+
+    // Save audio output if requested
+    if (!params.audio_output_path.empty() && !output_tokens.empty()) {
+        LOG_INF("Audio output requested for Qwen3OmniMoe model\n");
+
+        // Note: Qwen3OmniMoe audio generation requires additional components:
+        // 1. The thinker model generates text tokens (what llama.cpp handles)
+        // 2. The talker model converts text to audio codec tokens (not included in llama.cpp)
+        // 3. The Code2Wav module converts codec tokens to audio waveforms
+        //
+        // For full audio generation, you would need to:
+        // - Run the talker model separately to generate codec tokens
+        // - Use the Code2Wav module to convert codec tokens to audio
+        //
+        // This implementation saves a placeholder audio file to indicate where
+        // the audio output would be generated in a full implementation.
+
+        LOG_WRN("Full audio generation requires the talker and Code2Wav components\n");
+        LOG_WRN("which are not included in the llama.cpp implementation.\n");
+        LOG_WRN("Saving a placeholder audio file to: %s\n", params.audio_output_path.c_str());
+
+        std::vector<float> audio_samples;
+
+        // Create a short beep to indicate placeholder
+        const int sample_rate = 16000;
+        const float duration = 0.1f; // 100ms beep
+        const int num_samples = static_cast<int>(sample_rate * duration);
+        audio_samples.reserve(num_samples);
+
+        // Generate a 1kHz beep
+        for (int i = 0; i < num_samples; ++i) {
+            float t = static_cast<float>(i) / sample_rate;
+            float sample = 0.3f * sinf(2.0f * M_PI * 1000.0f * t);
+            audio_samples.push_back(sample);
+        }
+
+        if (!wav_writer::write(audio_samples, sample_rate, params.audio_output_path)) {
+            LOG_ERR("Failed to write placeholder audio to %s\n", params.audio_output_path.c_str());
+        } else {
+            LOG_INF("Placeholder audio saved. For full audio generation, use the complete Qwen3OmniMoe pipeline.\n");
+        }
+    }
 
     common_sampler_free(smpl);
 
