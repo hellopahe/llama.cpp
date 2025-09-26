@@ -22,6 +22,7 @@ import math
 import numpy as np
 import torch
 
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -39,6 +40,8 @@ from mistral_common.tokens.tokenizers.sentencepiece import (
 
 logger = logging.getLogger("hf-to-gguf")
 
+import pydevd_pycharm
+pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
 ###### MODEL DEFINITIONS ######
 
