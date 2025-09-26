@@ -10,6 +10,8 @@ from enum import IntEnum
 from pathlib import Path
 
 import numpy as np
+import pydevd_pycharm
+pydevd_pycharm.settrace('localhost', port=12345, stdoutToServer=True, stderrToServer=True)
 
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
